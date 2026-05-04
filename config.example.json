@@ -1,7 +1,6 @@
 {
   "milky": {
-    "ws_gateway": "ws://127.0.0.1:22345/event",
-    "rest_gateway": "http://127.0.0.1:22345/api",
+    "ws_endpoint": "ws://127.0.0.1:22345/event",
     "token": ""
   },
   "onebot": {
