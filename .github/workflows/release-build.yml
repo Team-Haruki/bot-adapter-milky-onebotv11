@@ -49,61 +49,75 @@ jobs:
 
   build:
     needs: resolve-release
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux_amd64
             archive: tar.gz
             ext: ""
-          - goos: linux
-            goarch: arm64
+            run_tests: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux_arm64
             archive: tar.gz
             ext: ""
-          - goos: windows
-            goarch: amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: darwin_arm64
+            archive: tar.gz
+            ext: ""
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            platform: darwin_amd64
+            archive: tar.gz
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows_amd64
             archive: zip
             ext: .exe
-          - goos: windows
-            goarch: arm64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            platform: windows_arm64
             archive: zip
             ext: .exe
-          - goos: darwin
-            goarch: amd64
-            archive: tar.gz
-            ext: ""
-          - goos: darwin
-            goarch: arm64
-            archive: tar.gz
-            ext: ""
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: go.mod
-          cache: true
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Run tests
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: go test ./...
+        if: matrix.run_tests
+        run: cargo test --locked
 
-      - name: Build package
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
         shell: bash
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
           BIN_EXT: ${{ matrix.ext }}
           ARCHIVE_TYPE: ${{ matrix.archive }}
           TAG_NAME: ${{ needs.resolve-release.outputs.tag_name }}
         run: |
           set -euo pipefail
 
-          base_name="${APP_NAME}_${TAG_NAME}_${GOOS}_${GOARCH}"
+          base_name="${APP_NAME}_${TAG_NAME}_${PLATFORM}"
           package_dir="dist/${base_name}"
           binary_name="${APP_NAME}${BIN_EXT}"
           archive_path="dist/${base_name}.${ARCHIVE_TYPE}"
@@ -111,29 +125,29 @@ jobs:
           rm -rf dist
           mkdir -p "${package_dir}"
 
-          CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
-            go build -trimpath -ldflags="-s -w" \
-            -o "${package_dir}/${binary_name}" \
-            ./cmd/milky-ob11-bridge
-
+          cp "target/${TARGET}/release/${binary_name}" "${package_dir}/${binary_name}"
           cp README.md "${package_dir}/README.md"
           cp config.example.json "${package_dir}/config.example.json"
 
           if [ "${ARCHIVE_TYPE}" = "zip" ]; then
             (
               cd dist
-              zip -rq "${base_name}.zip" "${base_name}"
+              7z a -tzip "${base_name}.zip" "${base_name}" >/dev/null
             )
           else
             tar -C dist -czf "${archive_path}" "${base_name}"
           fi
 
-          sha256sum "${archive_path}" > "${archive_path}.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${archive_path}" > "${archive_path}.sha256"
+          else
+            shasum -a 256 "${archive_path}" > "${archive_path}.sha256"
+          fi
 
       - name: Upload packaged artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: release-${{ matrix.platform }}
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -147,14 +161,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: release-assets
           merge-multiple: true
 
       - name: Upload assets to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve-release.outputs.tag_name }}
           files: |
