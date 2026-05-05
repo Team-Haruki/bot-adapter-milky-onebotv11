@@ -3,7 +3,9 @@
 # ── Builder ────────────────────────────────────────────────────────────────────
 FROM rust:alpine AS builder
 
-RUN apk add --no-cache musl-dev
+RUN apk add --no-cache musl-dev openssl-dev
+
+ENV OPENSSL_STATIC=1
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
