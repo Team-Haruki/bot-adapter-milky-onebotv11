@@ -211,7 +211,7 @@ pub fn build_onebot_message(format: &str, segments: &[Segment]) -> (Value, Strin
     (Value::Array(array), build_cq_string(segments))
 }
 
-fn build_cq_string(segments: &[Segment]) -> String {
+pub fn build_cq_string(segments: &[Segment]) -> String {
     let mut buf = String::new();
     for seg in segments {
         match seg.kind {

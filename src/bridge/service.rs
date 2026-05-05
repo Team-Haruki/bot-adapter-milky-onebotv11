@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{MissedTickBehavior, interval};
 
-use super::message_ir::parse_onebot_message;
+use super::message_ir::{build_cq_string, parse_onebot_message};
 use super::translator::{build_get_msg_sender, translate_event, unsupported_action};
 use crate::config::Config;
 use crate::milky::{Client as MilkyClient, MilkyClientError};
@@ -18,7 +18,7 @@ use crate::onebot::{
 };
 use crate::state::{MessageMap, RequestMap, Runtime};
 use crate::types::{
-    GroupInfo, GroupMemberInfo, InboundEvent, LoginInfo, MessageRef, RequestRef, Segment,
+    EventKind, GroupInfo, GroupMemberInfo, InboundEvent, LoginInfo, MessageRef, RequestRef, Segment,
 };
 
 #[derive(Debug, Error)]
@@ -192,6 +192,7 @@ impl Service {
                 _ = shutdown.changed() => break,
                 event = inbound_rx.recv() => {
                     let Some(event) = event else { break };
+                    log_inbound_event(&event);
                     if let Some(payload) = self.translate(event) {
                         server.broadcast(payload).await;
                     }
@@ -289,9 +290,35 @@ impl Handler for Service {
 
 // ---- action handlers ---------------------------------------------------------
 
+fn deserialize_flex_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    match Value::deserialize(deserializer)? {
+        Value::Null => Ok(0),
+        Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| Error::custom(format!("number {n} does not fit in i64"))),
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(0)
+            } else {
+                trimmed
+                    .parse::<i64>()
+                    .map_err(|e| Error::custom(format!("invalid integer string {s:?}: {e}")))
+            }
+        }
+        other => Err(Error::custom(format!(
+            "expected integer or numeric string, got {other}"
+        ))),
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct SendPrivateParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     user_id: i64,
     #[serde(default)]
     message: Value,
@@ -301,7 +328,7 @@ struct SendPrivateParams {
 
 #[derive(Debug, Default, Deserialize)]
 struct SendGroupParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     group_id: i64,
     #[serde(default)]
     message: Value,
@@ -313,9 +340,9 @@ struct SendGroupParams {
 struct SendMsgParams {
     #[serde(default)]
     message_type: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     user_id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     group_id: i64,
     #[serde(default)]
     message: Value,
@@ -325,21 +352,21 @@ struct SendMsgParams {
 
 #[derive(Debug, Default, Deserialize)]
 struct GroupIdParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     group_id: i64,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct GroupMemberParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     group_id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     user_id: i64,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct MessageIdParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flex_i64")]
     message_id: i64,
 }
 
@@ -563,14 +590,37 @@ impl Service {
     async fn action_get_msg(&self, params: Option<Value>, echo: Option<Value>) -> ApiResponse {
         let p: MessageIdParams = match decode(params, &echo) {
             Ok(p) => p,
-            Err(r) => return r,
+            Err(r) => {
+                tracing::warn!("get_msg: param decode failed");
+                return r;
+            }
         };
         let Some(reff) = self.messages.get(p.message_id) else {
+            tracing::warn!(message_id = p.message_id, "get_msg: message_id not in MessageMap");
             return failure(1502, "message_id not found", echo);
         };
+        tracing::debug!(
+            message_id = p.message_id,
+            scene = %reff.message_type,
+            group_id = reff.group_id,
+            user_id = reff.user_id,
+            milky_seq = reff.milky_seq,
+            "get_msg: looking up upstream",
+        );
         let event = match self.upstream.get_message(&reff).await {
-            Ok(e) => e,
-            Err(e) => return failure(1500, e.to_string(), echo),
+            Ok(e) => {
+                tracing::debug!(
+                    message_id = p.message_id,
+                    segment_count = e.segments.len(),
+                    segment_kinds = ?e.segments.iter().map(|s| s.kind).collect::<Vec<_>>(),
+                    "get_msg: upstream returned",
+                );
+                e
+            }
+            Err(e) => {
+                tracing::warn!(message_id = p.message_id, err = %e, "get_msg: upstream error");
+                return failure(1500, e.to_string(), echo);
+            }
         };
         let (message, raw) = super::message_ir::build_onebot_message(
             &self.cfg.bridge.message_format,
@@ -645,6 +695,31 @@ impl Service {
     }
 }
 
+fn log_inbound_event(event: &InboundEvent) {
+    match event.kind {
+        EventKind::MessagePrivate => {
+            tracing::info!(
+                user_id = event.user_id,
+                message_id = event.message_id,
+                nickname = %event.sender.nickname,
+                "private message: {}",
+                build_cq_string(&event.segments),
+            );
+        }
+        EventKind::MessageGroup => {
+            tracing::info!(
+                group_id = event.group_id,
+                user_id = event.user_id,
+                message_id = event.message_id,
+                nickname = %event.sender.nickname,
+                "group message: {}",
+                build_cq_string(&event.segments),
+            );
+        }
+        _ => {}
+    }
+}
+
 #[allow(clippy::result_large_err)]
 fn parse_message(
     raw: &Value,
@@ -661,6 +736,24 @@ mod tests {
     use crate::types::{EventKind, SegmentType, Sender};
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn message_id_params_accepts_string_and_number() {
+        let from_num: MessageIdParams =
+            serde_json::from_value(json!({"message_id": 61034})).unwrap();
+        assert_eq!(from_num.message_id, 61034);
+
+        let from_str: MessageIdParams =
+            serde_json::from_value(json!({"message_id": "61034"})).unwrap();
+        assert_eq!(from_str.message_id, 61034);
+
+        let missing: MessageIdParams = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(missing.message_id, 0);
+
+        let null: MessageIdParams =
+            serde_json::from_value(json!({"message_id": null})).unwrap();
+        assert_eq!(null.message_id, 0);
+    }
 
     fn cfg() -> Config {
         Config {

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::message_ir::build_onebot_message;
 use crate::state::{MessageMap, RequestMap};
-use crate::types::{EventKind, InboundEvent, MessageRef, Sender};
+use crate::types::{EventKind, InboundEvent, MessageRef, Segment, SegmentType, Sender};
 
 pub fn translate_event(
     event: InboundEvent,
@@ -23,6 +23,7 @@ pub fn translate_event(
                 user_id: event.user_id,
                 ..MessageRef::default()
             });
+            register_reply_refs(messages, &event.segments, "private", 0, event.user_id);
             let (message, raw) = build_onebot_message(message_format, &event.segments);
             Some(json!({
                 "time": time,
@@ -46,6 +47,7 @@ pub fn translate_event(
                 group_id: event.group_id,
                 user_id: event.user_id,
             });
+            register_reply_refs(messages, &event.segments, "group", event.group_id, 0);
             let (message, raw) = build_onebot_message(message_format, &event.segments);
             Some(json!({
                 "time": time,
@@ -180,6 +182,36 @@ pub fn unsupported_action(action: &str) -> String {
     format!("action {action} is not supported in v1")
 }
 
+fn register_reply_refs(
+    messages: &MessageMap,
+    segments: &[Segment],
+    message_type: &str,
+    group_id: i64,
+    user_id: i64,
+) {
+    for seg in segments {
+        if seg.kind != SegmentType::Reply {
+            continue;
+        }
+        let Some(id_str) = seg.data.get("id") else {
+            continue;
+        };
+        let Ok(seq) = id_str.parse::<i64>() else {
+            continue;
+        };
+        if messages.get(seq).is_some() {
+            continue;
+        }
+        messages.put(MessageRef {
+            onebot_id: seq,
+            milky_seq: seq,
+            message_type: message_type.into(),
+            group_id,
+            user_id,
+        });
+    }
+}
+
 fn choose_event_time(ts: i64) -> i64 {
     if ts > 0 {
         return ts;
@@ -206,6 +238,16 @@ mod tests {
 
     fn map_pair() -> (MessageMap, RequestMap) {
         (MessageMap::new(8), RequestMap::new())
+    }
+
+    fn reply_seg(seq: i64) -> Segment {
+        let mut data = BTreeMap::new();
+        data.insert("id".into(), seq.to_string());
+        Segment {
+            kind: SegmentType::Reply,
+            data,
+            raw: BTreeMap::new(),
+        }
     }
 
     fn text_seg(t: &str) -> Segment {
@@ -250,6 +292,49 @@ mod tests {
         let cached = msgs.get(42).unwrap();
         assert_eq!(cached.message_type, "private");
         assert_eq!(cached.user_id, 555);
+    }
+
+    #[test]
+    fn group_reply_pre_registers_referenced_seq() {
+        let (msgs, reqs) = map_pair();
+        let event = InboundEvent {
+            kind: EventKind::MessageGroup,
+            time: 0,
+            message_id: 99308,
+            group_id: 12345,
+            user_id: 200,
+            target_id: 0,
+            segments: vec![reply_seg(99304), text_seg("re")],
+            sender: Sender::default(),
+            comment: String::new(),
+            request: None,
+        };
+        translate_event(event, 1, "array", &msgs, &reqs).unwrap();
+        let referenced = msgs.get(99304).expect("reply target should be cached");
+        assert_eq!(referenced.message_type, "group");
+        assert_eq!(referenced.group_id, 12345);
+        assert_eq!(referenced.milky_seq, 99304);
+    }
+
+    #[test]
+    fn private_reply_pre_registers_referenced_seq() {
+        let (msgs, reqs) = map_pair();
+        let event = InboundEvent {
+            kind: EventKind::MessagePrivate,
+            time: 0,
+            message_id: 200,
+            group_id: 0,
+            user_id: 555,
+            target_id: 0,
+            segments: vec![reply_seg(180)],
+            sender: Sender::default(),
+            comment: String::new(),
+            request: None,
+        };
+        translate_event(event, 1, "array", &msgs, &reqs).unwrap();
+        let referenced = msgs.get(180).expect("reply target should be cached");
+        assert_eq!(referenced.message_type, "private");
+        assert_eq!(referenced.user_id, 555);
     }
 
     #[test]

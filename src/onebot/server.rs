@@ -339,11 +339,13 @@ impl Server {
     }
 
     async fn dispatch_request(&self, payload: &str, out_tx: &mpsc::UnboundedSender<String>) {
+        tracing::debug!(payload = payload, "onebot api request");
         let resp = match serde_json::from_str::<ApiRequest>(payload) {
             Ok(req) => self.handler.handle_api(req).await,
             Err(_) => failure(1400, "invalid json request", None),
         };
         if let Ok(s) = serde_json::to_string(&resp) {
+            tracing::debug!(payload = %s, "onebot api response");
             let _ = out_tx.send(s);
         }
     }
@@ -451,14 +453,16 @@ async fn serve_forward(
                 if !can_receive {
                     continue;
                 }
+                tracing::debug!(payload = %text, "onebot api request");
                 let resp = match serde_json::from_str::<ApiRequest>(text.as_ref()) {
                     Ok(req) => server.handler.handle_api(req).await,
                     Err(_) => failure(1400, "invalid json request", None),
                 };
-                if let Ok(s) = serde_json::to_string(&resp)
-                    && out_tx.send(s).is_err()
-                {
-                    break;
+                if let Ok(s) = serde_json::to_string(&resp) {
+                    tracing::debug!(payload = %s, "onebot api response");
+                    if out_tx.send(s).is_err() {
+                        break;
+                    }
                 }
             }
             Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => continue,
