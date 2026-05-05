@@ -12,7 +12,7 @@ COPY src/ ./src/
 RUN cargo build --release --locked
 
 # ── Runtime ────────────────────────────────────────────────────────────────────
-FROM alpine:3.21
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata
 

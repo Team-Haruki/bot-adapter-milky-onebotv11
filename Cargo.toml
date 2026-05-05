@@ -8,20 +8,20 @@ license = "MIT"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-lru = "0.16"
+lru = "0.18"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 milky-rust-sdk = "1"
 axum = { version = "0.8", features = ["ws"] }
-tokio-tungstenite = "0.28"
+tokio-tungstenite = "0.29"
 async-trait = "0.1"
 futures-util = "0.3"
 http = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(windows)'.dependencies]
-enable-ansi-support = "0.2"
+enable-ansi-support = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
