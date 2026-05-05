@@ -1,0 +1,7 @@
+target/
+.git/
+.github/
+.idea/
+.claude/
+config.json
+*.md
