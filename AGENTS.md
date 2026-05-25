@@ -44,9 +44,7 @@ docker build -t milky-ob11-bridge .
 
 CI (`.github/workflows/ci.yml`) runs on every push to `main` and on every PR: `cargo fmt --all --check`, `cargo clippy ... -D warnings`, `cargo test --locked`.
 
-The release workflow (`release-build.yml`) cross-compiles for linux/windows/darwin × amd64/arm64 on release publish.
 
-The Docker workflow (`docker-build.yml`) builds Alpine images for linux/amd64 and linux/arm64 using native runners and pushes a multi-arch manifest to GHCR.
 
 ## Architecture
 
@@ -91,13 +89,15 @@ The Docker workflow (`docker-build.yml`) builds Alpine images for linux/amd64 an
 - **`Upstream` trait**: mirrors `milky::Client`'s public async methods for test stubbing. Add new methods to both the trait and `StubUpstream` when extending the client.
 - **Tests**: in-crate (`#[cfg(test)] mod tests`), synchronous where possible; async tests use `#[tokio::test]`. No real network connections in tests.
 
-## Git Commits
+## Git commits
 
 All commit subjects must follow:
 
 ```text
 [Type] Short description starting with capital letter
 ```
+
+Allowed types:
 
 | Type      | Usage                                                 |
 |-----------|-------------------------------------------------------|
@@ -107,17 +107,38 @@ All commit subjects must follow:
 | `[Docs]`  | Documentation-only changes                            |
 
 Rules:
-- Description starts with a capital letter, imperative mood (`Add`, not `Added`).
-- No trailing period. Subject ≤ 70 characters.
-- Agent attribution via `Co-authored-by:` trailer:
+
+- Description starts with a capital letter.
+- Use imperative mood: `Add ...`, not `Added ...`.
+- No trailing period.
+- Keep the subject at or below roughly 70 characters.
+- **Agent attribution uses the standard Git `Co-authored-by:` trailer in the commit body, not a free-form `Agent:` line.** This makes GitHub render the co-author avatar on the commit page. The trailer must be on its own line, separated from the subject by a blank line, in the form `Co-authored-by: <Display Name> <email>`. Suggested values per agent:
+  - Claude (any 4.x): `Co-authored-by: Claude Opus 4.7 <noreply@anthropic.com>` (substitute the actual model, e.g. `Claude Sonnet 4.6`, `Claude Haiku 4.5`)
   - Codex: `Co-authored-by: Codex <noreply@openai.com>`
-  - Claude Sonnet 4.6: `Co-authored-by: Claude Sonnet 4.6 <noreply@anthropic.com>`
   - Copilot: `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`
 
-Example:
+Examples from this repo's history:
 
 ```text
-[Feat] Add Docker Alpine image and multi-arch build workflow
-
-Co-authored-by: Codex <noreply@openai.com>
+[Feat] Add Docker Alpine image, multi-arch build workflow, and agent docs
+[Fix] Lowercase GHCR image name to satisfy Docker reference format
+[Chore] Configure Dependabot updates
+[Fix] Add openssl-libs-static to Docker builder for musl static link
 ```
+
+## GitHub Actions workflows
+
+Use the standardized workflow layout in `.github/workflows`:
+
+- `ci.yml` runs on `main` pushes, pull requests targeting `main`, and manual dispatch.
+- Rust CI order: `cargo fmt --all -- --check`, `cargo check --locked --all-targets`, `cargo clippy --locked --all-targets -- -D warnings`, then `cargo test --locked`.
+- `release.yml` is the standard release build entrypoint. It runs on `v*` tags and manual dispatch, builds release artifacts, uploads them with `actions/upload-artifact`, and publishes GitHub Release assets on tag pushes.
+- `docker.yml` is the standard Docker entrypoint. It runs on `main` pushes, `v*` tags, PRs that touch Docker/build inputs, and manual dispatch. PRs build only; non-PR runs push GHCR images with lowercase image names and Docker metadata tags.
+
+Workflow maintenance rules:
+
+- Keep workflow filenames and top-level names aligned: `CI`, `Release`, `Docker`, and optional package-specific names.
+- Use `actions/checkout@v6`, `actions/setup-go@v6`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `softprops/action-gh-release@v3`, and current Docker actions (`setup-buildx@v4`, `login@v4`, `metadata@v6`, `build-push@v7`).
+- Keep `permissions` minimal: `contents: read` for CI/Docker build-only work, `contents: write` for release publishing, and `packages: write` only when pushing container images.
+- Use workflow `concurrency` keyed by workflow name and ref, with release jobs using `release-${{ github.ref_name }}` and `cancel-in-progress: false`.
+- Do not reintroduce legacy workflow names such as `rust-ci.yml`, `build.yml`, `release-build.yml`, `docker-build.yml`, or `docker-release.yml` unless a package-specific workflow already exists and is intentionally preserved.
