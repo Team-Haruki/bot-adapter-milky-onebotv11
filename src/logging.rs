@@ -186,7 +186,7 @@ fn level_name(level: &Level) -> &'static str {
         Level::TRACE => "TRACE",
         Level::DEBUG => "DEBUG",
         Level::INFO => "INFO",
-        Level::WARN => "WARN",
+        Level::WARN => "WARNING",
         Level::ERROR => "ERROR",
     }
 }
