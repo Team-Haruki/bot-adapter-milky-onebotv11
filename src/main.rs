@@ -36,7 +36,7 @@ async fn main() -> ExitCode {
 
     logging::init(&cfg.bridge.log_level);
     tracing::info!(
-        "===== Milky OneBot Bridge v{} =====",
+        "========================= Milky OneBot Bridge v{} =========================",
         env!("CARGO_PKG_VERSION")
     );
     tracing::info!("Powered by Haruki Dev Team");
